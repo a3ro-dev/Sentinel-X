@@ -1,6 +1,5 @@
 # This robot controls a robot with two motors, a servo, and an ultrasonic sensor using an ESP32 microcontroller. 
 # It includes functions to move the robot forward, backward, turn left, turn right, and stop. 
-
 # It also measures distance using the ultrasonic sensor and adjusts the robot's movement to avoid obstacles.
 # Functions:
 #     stop():
