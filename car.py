@@ -61,8 +61,12 @@ def set_speeds(left_speed, right_speed):
         left_speed (int): Speed for the left motor (0-1023).
         right_speed (int): Speed for the right motor (0-1023).
     """
-    left = min(max(0, left_speed), 1023)
-    right = min(max(0, right_speed), 1023)
+    # Increased minimum speed for better responsiveness
+    MIN_SPEED = 400
+    MAX_SPEED = 1023
+    
+    left = min(max(MIN_SPEED, left_speed), MAX_SPEED)
+    right = min(max(MIN_SPEED, right_speed), MAX_SPEED)
     EN1.duty(left)
     EN2.duty(right)
 
@@ -129,15 +133,33 @@ def set_servo_angle(angle):
     duty = int(51 + (angle / 180) * 51)
     SERVO.duty(duty)
 
+def scan_surroundings():
+    """
+    Scan surroundings and return best direction to move.
+    Returns tuple: (best_angle, max_distance)
+    """
+    distances = {}
+    angles = [45, 90, 135]
+    
+    for angle in angles:
+        set_servo_angle(angle)
+        time.sleep_ms(100)  # Give servo time to move
+        dist = measure_distance()
+        distances[angle] = dist
+    
+    # Find the angle with maximum distance
+    best_angle = max(distances, key=distances.get)
+    return best_angle, distances[best_angle]
+
 def move_forward():
     """
-    Moves the robot forward at a safe speed.
+    Moves the robot forward at a higher speed.
     """
     IN1.value(1)
     IN2.value(0)
     IN3.value(1)
     IN4.value(0)
-    set_speeds(300, 300)  # Reduced speed for better control
+    set_speeds(800, 800)  # Higher speed for better response
 
 def move_backward():
     """
@@ -175,11 +197,12 @@ if not init_hardware():
     raise SystemExit()
 
 # Main control variables
-SAFE_DISTANCE = 40  # cm
+SAFE_DISTANCE = 25  # Reduced for quicker reaction
+TURN_TIME = 300  # ms
 error_count = 0
 MAX_ERRORS = 5
 
-# Simplified main loop
+# Improved main loop
 while True:
     try:
         error_count = 0
@@ -192,21 +215,31 @@ while True:
         
         if dist < SAFE_DISTANCE:
             stop()
-            # Quick backup
-            move_backward()
-            time.sleep_ms(300)
-            stop()
             
-            # Simple left turn when obstacle detected
-            turn_left()
-            time.sleep_ms(400)
-            stop()
+            # Scan surroundings for best path
+            best_angle, max_distance = scan_surroundings()
+            
+            if max_distance < SAFE_DISTANCE:
+                # No clear path - back up and try again
+                move_backward()
+                time.sleep_ms(500)
+                stop()
+            else:
+                # Turn towards the clearest path
+                if best_angle < 90:
+                    turn_right()
+                    time.sleep_ms(TURN_TIME)
+                else:
+                    turn_left()
+                    time.sleep_ms(TURN_TIME)
+                stop()
         else:
             move_forward()
         
     except Exception as e:
         error_count += 1
         stop()
+        print("Error:", e)
         
         if error_count >= MAX_ERRORS:
             print("Too many errors, stopping!")
@@ -214,4 +247,4 @@ while True:
         
         time.sleep_ms(100)
     
-    time.sleep_ms(50)  # Short delay for stable operation
+    time.sleep_ms(20)  # Reduced delay for faster response
