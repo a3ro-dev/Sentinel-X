@@ -125,46 +125,52 @@ def set_servo_angle(angle):
     duty = int(51 + (angle / 180) * 51)
     SERVO.duty(duty)
 
+def ramp_speed(start, target, steps=5):
+    """Gradually change speed to avoid sudden movements"""
+    current = start
+    step = (target - start) // steps
+    for _ in range(steps):
+        current += step
+        yield current
+    yield target
+
 def move_forward():
-    """
-    Moves the robot forward.
-    """
+    """Moves the robot forward with gradual acceleration"""
     IN1.value(1)
     IN2.value(0)
     IN3.value(1)
     IN4.value(0)
-    set_speeds(800, 800)  # Full speed forward
+    for speed in ramp_speed(200, 350):
+        set_speeds(speed, speed)
+        time.sleep_ms(20)
 
 def move_backward():
-    """
-    Moves the robot backward.
-    """
+    """Moves robot backward at reduced speed"""
     IN1.value(0)
     IN2.value(1)
     IN3.value(0)
     IN4.value(1)
+    set_speeds(250, 250)  # Gentler backward motion
 
 def turn_left():
-    """
-    Turns the robot left.
-    """
+    """Smoother left turn with speed control"""
     IN1.value(0)
     IN2.value(1)
     IN3.value(1)
     IN4.value(0)
-    # Differential speed for smoother turns
-    set_speeds(400, 800)
+    set_speeds(200, 350)  # Reduced differential for smoother turn
+    time.sleep_ms(150)  # Short turn pulse
+    stop()
 
 def turn_right():
-    """
-    Turns the robot right.
-    """
+    """Smoother right turn with speed control"""
     IN1.value(1)
     IN2.value(0)
     IN3.value(0)
     IN4.value(1)
-    # Differential speed for smoother turns
-    set_speeds(800, 400)
+    set_speeds(350, 200)  # Reduced differential for smoother turn
+    time.sleep_ms(150)  # Short turn pulse
+    stop()
 
 # Initialize hardware
 if not init_hardware():
@@ -172,13 +178,13 @@ if not init_hardware():
     raise SystemExit()
 
 # Configuration constants
-OBSTACLE_DISTANCE = 40  # cm
-FORWARD_PULSE_TIME = 100  # ms
+OBSTACLE_DISTANCE = 45  # Increased detection distance
+FORWARD_PULSE_TIME = 80  # Shorter forward pulses
 SENSOR_READ_WINDOW = 10  # ms
 MAX_STALE_READINGS = 3  # max consecutive 999 readings
 SERVO_MIN_ANGLE = 30  # degrees
 SERVO_MAX_ANGLE = 150  # degrees
-SERVO_STEP = 3  # degrees per sweep
+SERVO_STEP = 2  # Smoother servo sweep
 
 # Main control variables
 angle = 90  # Start centered
@@ -191,8 +197,6 @@ stale_reading_count = 0
 # Main loop with improved error handling
 while True:
     try:
-        error_count = 0
-        
         set_servo_angle(angle)
         dist = measure_distance()
         
@@ -209,37 +213,40 @@ while True:
         
         if dist < OBSTACLE_DISTANCE:
             stop()
-            set_speeds(400, 400)
             move_backward()
-            time.sleep_ms(100)  # Reduced from 200ms
+            time.sleep_ms(150)
             stop()
             
-            # Wider scan range
+            # Take multiple readings to confirm best direction
             distances = []
-            angles = [SERVO_MIN_ANGLE, 60, 90, 120, SERVO_MAX_ANGLE]
+            angles = [45, 90, 135]  # Simplified angle choices
             
             for scan_angle in angles:
                 set_servo_angle(scan_angle)
-                time.sleep_ms(40)  # Reduced servo settle time
-                distances.append(measure_distance())
+                time.sleep_ms(50)
+                # Average of two readings for reliability
+                d1 = measure_distance()
+                time.sleep_ms(20)
+                d2 = measure_distance()
+                distances.append((d1 + d2) / 2)
             
-            # Find direction with most space
-            max_dist = max(distances)
-            best_angle = angles[distances.index(max_dist)]
-            
-            if best_angle < 90:
-                turn_left()
+            # Choose turn direction based on most space
+            if max(distances) > OBSTACLE_DISTANCE:
+                if distances.index(max(distances)) == 0:
+                    turn_left()
+                elif distances.index(max(distances)) == 2:
+                    turn_right()
             else:
-                turn_right()
-                
-            time.sleep_ms(200)  # Reduced from 300ms
-            stop()
+                # If no clear path, back up more and try again
+                move_backward()
+                time.sleep_ms(200)
+                stop()
+
         else:
-            # Pulsed forward movement
             move_forward()
-            time.sleep_ms(FORWARD_PULSE_TIME)
+            time.sleep_ms(80)  # Shorter movement pulses
             stop()
-            time.sleep_ms(SENSOR_READ_WINDOW)
+            time.sleep_ms(20)  # Brief pause to check surroundings
         
         # Wider servo sweep
         angle += (SERVO_STEP * direction)
