@@ -1,6 +1,5 @@
 # This robot controls a robot with two motors, a servo, and an ultrasonic sensor using an ESP32 microcontroller. 
 # It includes functions to move the robot forward, backward, turn left, turn right, and stop. 
-
 # It also measures distance using the ultrasonic sensor and adjusts the robot's movement to avoid obstacles.
 # Functions:
 #     stop():
@@ -14,12 +13,10 @@
 #     move_backward():
 #     turn_left():
 #     turn_right():
-
 # Main loop:
 #     Continuously measures the distance in front of the robot. If an obstacle is detected within 25 cm, 
 #     it stops the robot, measures distances at different angles (45, 90, 135 degrees), and chooses the 
 #     direction with the most space to move. If no clear path is found, it moves backward briefly. 
-
 #     Otherwise, it turns towards the direction with the most space and continues moving forward.
 
 from machine import Pin, PWM, time_pulse_us
@@ -51,7 +48,6 @@ def stop():
     IN2.value(0)
     IN3.value(0)
     IN4.value(0)
-    set_speeds(0, 0)
 
 def set_speeds(left_speed, right_speed):
     """
@@ -61,12 +57,8 @@ def set_speeds(left_speed, right_speed):
         left_speed (int): Speed for the left motor (0-1023).
         right_speed (int): Speed for the right motor (0-1023).
     """
-    # Increased minimum speed for better responsiveness
-    MIN_SPEED = 400
-    MAX_SPEED = 1023
-    
-    left = min(max(MIN_SPEED, left_speed), MAX_SPEED)
-    right = min(max(MIN_SPEED, right_speed), MAX_SPEED)
+    left = min(max(0, left_speed), 1023)
+    right = min(max(0, right_speed), 1023)
     EN1.duty(left)
     EN2.duty(right)
 
@@ -133,43 +125,24 @@ def set_servo_angle(angle):
     duty = int(51 + (angle / 180) * 51)
     SERVO.duty(duty)
 
-def scan_surroundings():
-    """
-    Scan surroundings and return best direction to move.
-    Returns tuple: (best_angle, max_distance)
-    """
-    distances = {}
-    angles = [45, 90, 135]
-    
-    for angle in angles:
-        set_servo_angle(angle)
-        time.sleep_ms(100)  # Give servo time to move
-        dist = measure_distance()
-        distances[angle] = dist
-    
-    # Find the angle with maximum distance
-    best_angle = max(distances, key=distances.get)
-    return best_angle, distances[best_angle]
-
 def move_forward():
     """
-    Moves the robot forward at a higher speed.
+    Moves the robot forward.
     """
     IN1.value(1)
     IN2.value(0)
     IN3.value(1)
     IN4.value(0)
-    set_speeds(800, 800)  # Higher speed for better response
+    set_speeds(800, 800)  # Full speed forward
 
 def move_backward():
     """
-    Moves robot backward.
+    Moves the robot backward.
     """
     IN1.value(0)
     IN2.value(1)
     IN3.value(0)
     IN4.value(1)
-    set_speeds(300, 300)
 
 def turn_left():
     """
@@ -179,7 +152,8 @@ def turn_left():
     IN2.value(1)
     IN3.value(1)
     IN4.value(0)
-    set_speeds(300, 400)
+    # Differential speed for smoother turns
+    set_speeds(400, 800)
 
 def turn_right():
     """
@@ -189,7 +163,8 @@ def turn_right():
     IN2.value(0)
     IN3.value(0)
     IN4.value(1)
-    set_speeds(400, 300)
+    # Differential speed for smoother turns
+    set_speeds(800, 400)
 
 # Initialize hardware
 if not init_hardware():
@@ -197,54 +172,80 @@ if not init_hardware():
     raise SystemExit()
 
 # Main control variables
-SAFE_DISTANCE = 25  # Reduced for quicker reaction
-TURN_TIME = 300  # ms
+angle = 90  # Start centered
+direction = 1
+last_valid_distance = 999
 error_count = 0
 MAX_ERRORS = 5
 
-# Improved main loop
+# Main loop with improved error handling
 while True:
     try:
+        # Reset error count on successful iteration
         error_count = 0
         
-        # Center servo for forward scanning
-        set_servo_angle(90)
-        time.sleep_ms(50)
-        
+        set_servo_angle(angle)
         dist = measure_distance()
         
-        if dist < SAFE_DISTANCE:
+        # Keep track of last valid reading
+        if dist != 999:
+            last_valid_distance = dist
+        
+        # Use last valid distance if current reading failed
+        current_dist = dist if dist != 999 else last_valid_distance
+        
+        if current_dist < 25:  # Obstacle detected
+            stop()
+            set_speeds(400, 400)  # Reduced speed for safety
+            move_backward()
+            time.sleep_ms(200)
             stop()
             
-            # Scan surroundings for best path
-            best_angle, max_distance = scan_surroundings()
+            # Quick check both sides
+            left_dist = 999
+            right_dist = 999
             
-            if max_distance < SAFE_DISTANCE:
-                # No clear path - back up and try again
-                move_backward()
-                time.sleep_ms(500)
-                stop()
+            set_servo_angle(45)
+            time.sleep_ms(100)
+            left_dist = measure_distance()
+            
+            set_servo_angle(135)
+            time.sleep_ms(100)
+            right_dist = measure_distance()
+            
+            # Choose better direction
+            if left_dist > right_dist:
+                turn_left()
             else:
-                # Turn towards the clearest path
-                if best_angle < 90:
-                    turn_right()
-                    time.sleep_ms(TURN_TIME)
-                else:
-                    turn_left()
-                    time.sleep_ms(TURN_TIME)
-                stop()
+                turn_right()
+                
+            time.sleep_ms(300)
+            stop()
         else:
             move_forward()
         
+        # Smooth servo sweep
+        angle += (3 * direction)  # Reduced step size
+        if angle >= 135:
+            angle = 135
+            direction = -1
+        elif angle <= 45:
+            angle = 45
+            direction = 1
+            
     except Exception as e:
         error_count += 1
         stop()
-        print("Error:", e)
+        set_speeds(0, 0)
+        set_servo_angle(90)
         
         if error_count >= MAX_ERRORS:
             print("Too many errors, stopping!")
             break
-        
-        time.sleep_ms(100)
+            
+        # Emergency turn on error
+        turn_left()
+        time.sleep_ms(200)
+        stop()
     
-    time.sleep_ms(20)  # Reduced delay for faster response
+    time.sleep_ms(20)
