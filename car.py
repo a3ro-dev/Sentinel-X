@@ -40,6 +40,8 @@ SERVO = PWM(Pin(4), freq=50)
 TRIG = Pin(12, Pin.OUT)
 ECHO = Pin(14, Pin.IN)
 
+SAFE_DISTANCE = 35  # Increased safe distance
+
 def stop():
     """
     Stops both motors.
@@ -127,22 +129,23 @@ def set_servo_angle(angle):
 
 def move_forward():
     """
-    Moves the robot forward.
+    Moves the robot forward at a moderate speed.
     """
     IN1.value(1)
     IN2.value(0)
     IN3.value(1)
     IN4.value(0)
-    set_speeds(800, 800)  # Full speed forward
+    set_speeds(500, 500)  # Lower speed for smoother movement
 
 def move_backward():
     """
-    Moves the robot backward.
+    Moves the robot backward at a moderate speed.
     """
     IN1.value(0)
     IN2.value(1)
     IN3.value(0)
     IN4.value(1)
+    set_speeds(400, 400)  # Enough to retreat safely
 
 def turn_left():
     """
@@ -194,34 +197,41 @@ while True:
         # Use last valid distance if current reading failed
         current_dist = dist if dist != 999 else last_valid_distance
         
-        if current_dist < 25:  # Obstacle detected
+        if current_dist < SAFE_DISTANCE:
             stop()
-            set_speeds(400, 400)  # Reduced speed for safety
+            # Back up longer to avoid collisions
             move_backward()
-            time.sleep_ms(200)
+            time.sleep_ms(500)
             stop()
-            
-            # Quick check both sides
-            left_dist = 999
-            right_dist = 999
-            
-            set_servo_angle(45)
-            time.sleep_ms(100)
-            left_dist = measure_distance()
-            
-            set_servo_angle(135)
-            time.sleep_ms(100)
-            right_dist = measure_distance()
-            
-            # Choose better direction
-            if left_dist > right_dist:
-                turn_left()
+
+            # Perform a three-angle scan (left, center, right)
+            angles_to_check = [45, 90, 135]
+            measured_distances = {}
+            for a in angles_to_check:
+                set_servo_angle(a)
+                time.sleep_ms(200)  # Longer wait for servo
+                measured_distances[a] = measure_distance()
+
+            # Choose the angle with the greatest distance
+            best_angle = max(measured_distances, key=measured_distances.get)
+            if measured_distances[best_angle] < SAFE_DISTANCE:
+                # If no path is clear, attempt a larger backward move
+                move_backward()
+                time.sleep_ms(1000)
+                stop()
             else:
-                turn_right()
-                
-            time.sleep_ms(300)
-            stop()
+                # Turn in the best direction
+                if best_angle < 90:
+                    turn_left()
+                elif best_angle > 90:
+                    turn_right()
+                else:
+                    # Straight ahead if center is clear
+                    pass
+                time.sleep_ms(500)
+                stop()
         else:
+            # Move forward if clear
             move_forward()
         
         # Smooth servo sweep
@@ -248,4 +258,4 @@ while True:
         time.sleep_ms(200)
         stop()
     
-    time.sleep_ms(20)
+    time.sleep_ms(50)  # Slightly longer delay for smoother operation
