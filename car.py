@@ -20,7 +20,6 @@
 #     set_servo_angle(angle): Sets servo position (0-180°)
 #     move_forward(), move_backward(), turn_left(), turn_right(): Movement controls
 #     calculate_path_score(angle, distance): Weighted scoring for path selection
-#     estimate_path_width(left_dist, right_dist): Path clearance estimation
 #     get_adaptive_safe_distance(speed): Dynamic safe distance calculation
 #     proportional_steer(target_angle, base_speed): Smooth steering control
 #
@@ -219,19 +218,6 @@ def calculate_path_score(angle, distance):
     # Score is distance weighted by angle preference
     return distance * angle_factor
 
-def estimate_path_width(left_dist, right_dist):
-    """
-    Estimate the available path width from left and right distances.
-    
-    Args:
-        left_dist (float): Distance at left angle (45°)
-        right_dist (float): Distance at right angle (135°)
-    
-    Returns:
-        float: Estimated path width
-    """
-    # Simple path width: minimum of left/right clearance minus robot width
-    return min(left_dist, right_dist) - ROBOT_WIDTH
 
 def get_adaptive_safe_distance(current_speed):
     """
@@ -318,20 +304,24 @@ while True:
         # Use last valid distance if current reading failed
         current_dist = dist if dist != 999 else last_valid_distance
         
-        # Calculate approach rate for predictive avoidance
+        # Calculate approach rate ONLY at center position (90°) to avoid servo sweep contamination
         approach_rate = 0
-        if previous_distance != 999 and current_dist != 999:
-            approach_rate = previous_distance - current_dist
-            # Positive approach_rate means obstacle is getting closer
+        if angle == 90:  # Only track when looking straight ahead
+            if previous_distance != 999 and current_dist != 999:
+                raw_approach_rate = previous_distance - current_dist
+                # Cap approach rate to realistic values (max 5cm per 50ms iteration)
+                approach_rate = max(-5, min(5, raw_approach_rate))
+                # Positive approach_rate means obstacle is getting closer
+            
+            previous_distance = current_dist
         
-        previous_distance = current_dist
-        
-        # Calculate adaptive safe distance based on current speed and approach rate
+        # Calculate adaptive safe distance with sanity checks
         adaptive_safe = get_adaptive_safe_distance(current_speed)
         
-        # If approaching obstacle quickly, increase safe distance
+        # If approaching obstacle quickly, increase safe distance (reduced multiplier and capped)
         if approach_rate > 2:  # Approaching faster than 2cm per loop iteration
-            adaptive_safe += (approach_rate * 10)  # Add extra margin
+            additional_distance = min(approach_rate * 3, 30)  # Max 30cm extra (reduced from 10x)
+            adaptive_safe = min(adaptive_safe + additional_distance, 100)  # Cap at 100cm total
         
         if current_dist < adaptive_safe:
             stop()
@@ -352,15 +342,20 @@ while True:
             path_scores = {}
             for a in angles_to_check:
                 path_scores[a] = calculate_path_score(a, measured_distances[a])
-            
+
             # Choose the path with the highest weighted score
             best_angle = max(path_scores, key=path_scores.get)
             best_distance = measured_distances[best_angle]
             
-            # Estimate path width using left and right measurements
-            path_width = estimate_path_width(measured_distances[45], measured_distances[135])
+            # Simple corridor check: if going forward, ensure sides aren't too close
+            left_clearance = measured_distances[45]
+            right_clearance = measured_distances[135]
+            min_side_clearance = 30  # Minimum clearance needed on each side
+            corridor_too_narrow = (best_angle == 90 and 
+                                  (left_clearance < min_side_clearance or 
+                                   right_clearance < min_side_clearance))
             
-            if best_distance < BASE_SAFE_DISTANCE:
+            if best_distance < BASE_SAFE_DISTANCE or corridor_too_narrow:
                 # No clear path - increment stuck counter
                 stuck_counter += 1
                 
