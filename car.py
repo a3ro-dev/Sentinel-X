@@ -396,8 +396,9 @@ while True:
                 set_speeds(left_speed, right_speed)
                 current_speed = (left_speed + right_speed) // 2
                 time.sleep_ms(500)
-                stop()
-                current_speed = 0
+                # Continue moving forward after turning
+                move_forward()
+                current_speed = 500
         else:
             # Move forward if clear
             move_forward()
