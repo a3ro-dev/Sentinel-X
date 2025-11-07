@@ -25,10 +25,10 @@
 #     proportional_steer(target_angle, base_speed): Smooth steering control
 #
 # Main loop:
-#     1. Adaptive servo sweep (30-150°, 2-5° steps based on proximity)
+#     1. Adaptive servo sweep (2-5° steps based on proximity)
 #     2. Enhanced distance measurement with EMA and median filtering
 #     3. Adaptive safe distance calculation (speed + approach rate)
-#     4. When obstacle detected: 3-angle scan (30°, 90°, 150°) with weighted scoring
+#     4. When obstacle detected: 3-angle scan with weighted scoring
 #     5. Path width estimation and proportional steering
 #     6. Smooth turns instead of sharp pivots
 
@@ -66,8 +66,6 @@ def stop():
     IN2.value(0)
     IN3.value(0)
     IN4.value(0)
-    EN1.duty(0)
-    EN2.duty(0)
 
 def set_speeds(left_speed, right_speed):
     """
@@ -127,8 +125,6 @@ def measure_distance():
                 dist_cm = (duration * 0.0343) / 2
                 if 2 <= dist_cm <= 400:
                     readings.append(dist_cm)
-            
-            time.sleep_ms(10)  # Delay between readings to prevent interference
         except:
             continue
             
@@ -209,7 +205,7 @@ def calculate_path_score(angle, distance):
     Prefers forward direction and greater distances.
     
     Args:
-        angle (int): Angle of the path (30-150 degrees)
+        angle (int): Angle of the path (45-135 degrees)
         distance (float): Distance to obstacle at that angle
     
     Returns:
@@ -217,7 +213,7 @@ def calculate_path_score(angle, distance):
     """
     # Angle factor: 1.0 for forward (90°), slightly lower for sides
     # Formula: 1.0 - (abs(angle - 90) * 0.0005)
-    # At 30° or 150°: 1.0 - (60 * 0.0005) = 0.97
+    # At 45° or 135°: 1.0 - (45 * 0.0005) = 0.9775
     angle_factor = 1.0 - (abs(angle - 90) * 0.0005)
     
     # Score is distance weighted by angle preference
@@ -228,8 +224,8 @@ def estimate_path_width(left_dist, right_dist):
     Estimate the available path width from left and right distances.
     
     Args:
-        left_dist (float): Distance at left angle (30°)
-        right_dist (float): Distance at right angle (150°)
+        left_dist (float): Distance at left angle (45°)
+        right_dist (float): Distance at right angle (135°)
     
     Returns:
         float: Estimated path width
@@ -258,7 +254,7 @@ def proportional_steer(target_angle, base_speed=500):
     Calculate motor speeds for proportional steering toward target angle.
     
     Args:
-        target_angle (int): Target angle to steer toward (30, 90, or 150)
+        target_angle (int): Target angle to steer toward (45, 90, or 135)
         base_speed (int): Base forward speed
     
     Returns:
@@ -268,8 +264,8 @@ def proportional_steer(target_angle, base_speed=500):
     angle_diff = target_angle - 90
     
     # Steering factor: maps angle difference to speed adjustment
-    # At 30° (left): angle_diff = -60, adds to right, reduces left
-    # At 150° (right): angle_diff = 60, adds to left, reduces right
+    # At 45° (left): angle_diff = -45, adds to right, reduces left
+    # At 135° (right): angle_diff = 45, adds to left, reduces right
     steering_adjustment = abs(angle_diff) * 3  # Scaling factor
     
     if angle_diff < 0:  # Turn left
@@ -310,23 +306,18 @@ previous_distance = 999  # Track previous distance for approach rate calculation
 # Main loop with improved error handling
 while True:
     try:
+        # Reset error count on successful iteration
+        error_count = 0
+        
         set_servo_angle(angle)
-        time.sleep_ms(50)  # Allow servo to settle before measurement
         dist = measure_distance()
         
         # Keep track of last valid reading
         if dist != 999:
             last_valid_distance = dist
-            current_dist = dist
-        elif last_valid_distance != 999:
-            # Use last valid reading if current failed
-            current_dist = last_valid_distance
-        else:
-            # No valid readings at all - STOP for safety
-            stop()
-            current_speed = 0
-            time.sleep_ms(100)
-            continue
+        
+        # Use last valid distance if current reading failed
+        current_dist = dist if dist != 999 else last_valid_distance
         
         # Calculate approach rate for predictive avoidance
         approach_rate = 0
@@ -334,9 +325,7 @@ while True:
             approach_rate = previous_distance - current_dist
             # Positive approach_rate means obstacle is getting closer
         
-        # Only update previous_distance with valid readings
-        if current_dist != 999:
-            previous_distance = current_dist
+        previous_distance = current_dist
         
         # Calculate adaptive safe distance based on current speed and approach rate
         adaptive_safe = get_adaptive_safe_distance(current_speed)
@@ -347,16 +336,13 @@ while True:
         
         if current_dist < adaptive_safe:
             stop()
-            current_speed = 0
             # Back up longer to avoid collisions
             move_backward()
-            current_speed = 400
             time.sleep_ms(500)
             stop()
-            current_speed = 0
 
             # Perform a three-angle scan (left, center, right)
-            angles_to_check = [30, 90, 150]
+            angles_to_check = [45, 90, 135]
             measured_distances = {}
             for a in angles_to_check:
                 set_servo_angle(a)
@@ -373,15 +359,13 @@ while True:
             best_distance = measured_distances[best_angle]
             
             # Estimate path width using left and right measurements
-            path_width = estimate_path_width(measured_distances[30], measured_distances[150])
+            path_width = estimate_path_width(measured_distances[45], measured_distances[135])
             
-            if best_distance < adaptive_safe or path_width < 10:
-                # If no path is clear or path too narrow, back up more
+            if best_distance < BASE_SAFE_DISTANCE:
+                # If no path is clear, attempt a larger backward move
                 move_backward()
-                current_speed = 400
                 time.sleep_ms(1000)
                 stop()
-                current_speed = 0
             else:
                 # Use proportional steering for smoother turns
                 left_speed, right_speed = proportional_steer(best_angle, base_speed=500)
@@ -394,15 +378,11 @@ while True:
                 
                 # Apply calculated speeds for proportional steering
                 set_speeds(left_speed, right_speed)
-                current_speed = (left_speed + right_speed) // 2
                 time.sleep_ms(500)
-                # Continue moving forward after turning
-                move_forward()
-                current_speed = 500
+                stop()
         else:
             # Move forward if clear
             move_forward()
-            current_speed = 500
         
         # Adaptive servo sweep: adjust step size based on proximity
         # When obstacles are close, scan more densely (smaller steps)
@@ -415,21 +395,17 @@ while True:
             step_size = 5  # Fast scanning when path is clear
         
         angle += (step_size * direction)
-        if angle >= 150:
-            angle = 150
+        if angle >= 135:
+            angle = 135
             direction = -1
-        elif angle <= 30:
-            angle = 30
+        elif angle <= 45:
+            angle = 45
             direction = 1
-        
-        # Reset error count only after successful iteration
-        error_count = 0
             
     except Exception as e:
         error_count += 1
         stop()
         set_speeds(0, 0)
-        current_speed = 0
         set_servo_angle(90)
         
         if error_count >= MAX_ERRORS:
